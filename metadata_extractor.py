@@ -1,6 +1,3 @@
-# Image Metadata Extractor
-# Extract EXIF metadata from any image using Python
-
 import sys
 from pathlib import Path
 
@@ -8,68 +5,76 @@ try:
     from PIL import Image
     from PIL.ExifTags import TAGS, GPSTAGS
 except ImportError:
-    print("[!] Pillow nije instaliran.")
-    print("[i] Instaliraj ga sa: pip install Pillow")
+    print("[!] Pillow nije instaliran. Pokreni: pip install Pillow")
     sys.exit(1)
+
+MAX_FILE_SIZE = 10 * 1024 * 1024  # Bezbednosni limit: Maksimalno 10 MB po slici
+
+
+def sanitize_image(image_path):
+    """Kreira novu kopiju slike bez ikakvih EXIF/GPS metapodataka."""
+    path = Path(image_path)
+    if not path.is_file():
+        return "[-] Fajl nije pronađen."
+
+    try:
+        with Image.open(path) as img:
+            clean_path = path.parent / f"{path.stem}_cleaned{path.suffix}"
+            data = list(img.getdata())
+            image_clean = Image.new(img.mode, img.size)
+            image_clean.putdata(data)
+            image_clean.save(clean_path)
+            return f"[+] Privatnost zaštićena! Očišćena slika sačuvana kao: {clean_path.name}"
+    except Exception as e:
+        return f"[-] Greška pri čišćenju slike: {e}"
 
 
 def convert_to_degrees(value):
-    """Pretvara GPS stepene, minute i sekunde u decimalne brojeve."""
-    # Zaštita: Ako GPS zapis nema tačno 3 elementa (stepeni, minuti, sekunde), preskoči ga
-    if len(value) != 3:
+    if not value or len(value) != 3:
         return None
-
-    d, m, s = value
-    return d + (m / 60.0) + (s / 3600.0)
+    try:
+        d, m, s = value
+        return float(d) + (float(m) / 60.0) + (float(s) / 3600.0)
+    except (ZeroDivisionError, ValueError, TypeError):
+        return None
 
 
 def get_gps_coordinates(exif_data):
-    """Ekstraktuje i konvertuje GPS podatke iz EXIF-a."""
     try:
-        # 0x8825 je ID za GPSInfo u EXIF podacima
         gps_info = exif_data.get_ifd(0x8825)
-    except AttributeError:
-        # Rezervna opcija ako get_ifd nije podržan
-        return None
     except Exception:
         return None
 
     if not gps_info:
         return None
 
-    gps_data = {}
-    for tag_id, value in gps_info.items():
-        tag_name = GPSTAGS.get(tag_id, tag_id)
-        gps_data[tag_name] = value
-
-    # Provjera da li postoje neophodni GPS tagovi
+    gps_data = {GPSTAGS.get(tag_id, tag_id): value for tag_id, value in gps_info.items()}
     required_tags = ["GPSLatitude", "GPSLatitudeRef", "GPSLongitude", "GPSLongitudeRef"]
     if not all(tag in gps_data for tag in required_tags):
         return None
 
     lat = convert_to_degrees(gps_data["GPSLatitude"])
-    if lat is None:
-        return None
-    lat_ref = gps_data["GPSLatitudeRef"]
-    if lat_ref != "N":
-        lat = -lat
-
     lon = convert_to_degrees(gps_data["GPSLongitude"])
-    if lon is None:
+
+    if lat is None or lon is None:
         return None
-    lon_ref = gps_data["GPSLongitudeRef"]
-    if lon_ref != "E":
+
+    if gps_data["GPSLatitudeRef"] != "N":
+        lat = -lat
+    if gps_data["GPSLongitudeRef"] != "E":
         lon = -lon
 
     return lat, lon
 
 
 def get_metadata(image_path):
-    """Extract and print EXIF metadata from an image."""
     path = Path(image_path)
-
     if not path.is_file():
         print(f"[-] Fajl nije pronađen: {image_path}")
+        return
+
+    if path.stat().st_size > MAX_FILE_SIZE:
+        print("[-] Greška: Fajl je preveliki. Maksimalna dozvoljena veličina je 10MB.")
         return
 
     try:
@@ -83,32 +88,33 @@ def get_metadata(image_path):
     print("-" * 45)
 
     if not exif_data:
-        print("[-] Nema EXIF metapodataka u ovoj slici.")
+        print("[-] Nema EXIF metapodataka.")
         return
 
-    # Ispis standardnih tagova
     for tag_id, value in exif_data.items():
         tag_name = TAGS.get(tag_id, tag_id)
-        # Preskačemo sirovi GPSInfo blok jer ćemo ga obraditi posebno
         if tag_name != "GPSInfo":
-            print(f"{tag_name:25}: {value}")
+            print(f"{tag_name:25}: {str(value)[:50]}")
 
-    # Provjera i ispis GPS lokacije
     coords = get_gps_coordinates(exif_data)
     if coords:
         lat, lon = coords
         print("-" * 45)
-        print(f"{'GPS Latitude':25}: {lat}")
-        print(f"{'GPS Longitude':25}: {lon}")
-        print(f"\n[🌍] Google Maps link:")
-        print(f"https://www.google.com/maps?q={lat},{lon}")
+        print(f"GPS Latitude: {lat}\nGPS Longitude: {lon}")
+        print(f"\n[🌍] Google Maps link:\nhttps://google.com/maps?q={lat},{lon}")
     else:
-        print("\n[-] Nema GPS podataka u ovoj slici.")
-
-    print("\n[+] Ekstrakcija završena.")
+        print("\n[-] Nema GPS lokacije.")
 
 
 if __name__ == "__main__":
-    print("</> IMAGE METADATA EXTRACTOR")
-    image_path = input("Unesi putanju do slike: ").strip()
-    get_metadata(image_path)
+    print("</> METADATA EXTRACTOR & SANITIZER")
+    print("1. Izvuci metapodatke")
+    print("2. Obriši metapodatke iz slike (Privatnost)")
+
+    choice = input("Izaberi opciju (1 ili 2): ").strip()
+    img_path = input("Unesi putanju do slike: ").strip()
+
+    if choice == "1":
+        get_metadata(img_path)
+    elif choice == "2":
+        print(sanitize_image(img_path))
